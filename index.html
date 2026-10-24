@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rắn Săn Mồi — 5 Cấp Độ</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+    background: #0f172a; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif;
+    padding: 16px;
+  }
+  h1 { margin: 8px 0 4px; font-size: 28px; }
+  p.sub { margin: 0 0 12px; color: #94a3b8; }
+  #hud {
+    display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;
+    margin-bottom: 10px; font-size: 17px; font-weight: 600;
+  }
+  #hud span { background: #1e293b; padding: 6px 12px; border-radius: 999px; }
+  #board-wrap { position: relative; }
+  canvas {
+    background: #020617; border: 3px solid #334155; border-radius: 12px;
+    display: block; max-width: 92vw; height: auto;
+  }
+  #overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column; gap: 10px;
+    align-items: center; justify-content: center; text-align: center;
+    background: rgba(2, 6, 23, 0.82); border-radius: 12px; padding: 20px;
+  }
+  #overlay.hidden { display: none; }
+  #overlay h2 { margin: 0; font-size: 26px; }
+  #overlay p { margin: 0; color: #cbd5e1; line-height: 1.5; max-width: 420px; }
+  button {
+    cursor: pointer; border: 0; border-radius: 999px; padding: 10px 20px;
+    background: #22c55e; color: #052e16; font-size: 16px; font-weight: 700;
+  }
+  button.secondary { background: #334155; color: #e2e8f0; }
+  #controls { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  #pad { margin-top: 12px; display: grid; grid-template-columns: repeat(3, 52px); gap: 6px; }
+  #pad button { padding: 0; height: 52px; font-size: 22px; background: #1e293b; color: #e2e8f0; }
+  #pad .spacer { visibility: hidden; }
+  .hint { color: #94a3b8; font-size: 14px; margin-top: 10px; text-align: center; }
+  #levels { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; justify-content: center; }
+  #levels button { padding: 6px 12px; font-size: 14px; }
+  #levels button.active { background: #facc15; color: #422006; }
+  #levels button.done { background: #166534; color: #dcfce7; }
+</style>
+</head>
+<body>
+<h1>🐍 Rắn Săn Mồi</h1>
+<p class="sub">Ăn đủ mồi để qua màn. Đừng cắn chính mình và đừng đâm vào chướng ngại vật!</p>
+
+<div id="levels" aria-label="Chọn cấp độ"></div>
+
+<div id="hud">
+  <span>⭐ Điểm: <b id="score">0</b></span>
+  <span>🎯 Mồi: <b id="eaten">0</b>/<b id="target">5</b></span>
+  <span>🏁 Cấp độ: <b id="levelLabel">1</b>/5</span>
+  <span>🏆 Kỷ lục: <b id="best">0</b></span>
+</div>
+
+<div id="board-wrap">
+  <canvas id="game" width="600" height="600"></canvas>
+  <div id="overlay">
+    <h2 id="overlayTitle">Sẵn sàng chưa?</h2>
+    <p id="overlayText">Dùng phím mũi tên hoặc WASD để di chuyển. Trên điện thoại, vuốt hoặc dùng nút bên dưới.</p>
+    <button id="startBtn">▶ Bắt đầu chơi</button>
+  </div>
+</div>
+
+<div id="controls">
+  <button id="pauseBtn" class="secondary">⏸ Tạm dừng</button>
+  <button id="restartBtn" class="secondary">↻ Chơi lại màn này</button>
+</div>
+
+<div id="pad" aria-label="Nút điều khiển">
+  <span class="spacer"></span><button data-dir="up">⬆</button><span class="spacer"></span>
+  <button data-dir="left">⬅</button><button data-dir="down">⬇</button><button data-dir="right">➡</button>
+</div>
+
+<p class="hint">Phím Space: tạm dừng / tiếp tục &nbsp;•&nbsp; Mồi vàng = 10 điểm, mồi đỏ (hiếm) = 30 điểm</p>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const CELL = 20, COLS = 30, ROWS = 30;
+const scoreEl = document.getElementById('score');
+const eatenEl = document.getElementById('eaten');
+const targetEl = document.getElementById('target');
+const levelLabel = document.getElementById('levelLabel');
+const bestEl = document.getElementById('best');
+const overlay = document.getElementById('overlay');
+const overlayTitle = document.getElementById('overlayTitle');
+const overlayText = document.getElementById('overlayText');
+const startBtn = document.getElementById('startBtn');
+const levelsEl = document.getElementById('levels');
+
+// 5 cấp độ: tốc độ tăng dần, chướng ngại vật nhiều dần, mục tiêu tăng dần.
+const LEVELS = [
+  { name: 'Cấp 1 — Làm quen', speed: 150, target: 5,  obstacles: [] },
+  { name: 'Cấp 2 — Tăng tốc',  speed: 125, target: 7,  obstacles: [[10,10],[11,10],[12,10],[19,19],[19,20]] },
+  { name: 'Cấp 3 — Chướng ngại', speed: 105, target: 9, obstacles: [[5,5],[5,6],[5,7],[24,5],[24,6],[24,7],[5,24],[6,24],[23,24],[24,24],[14,14],[15,14]] },
+  { name: 'Cấp 4 — Mê cung',  speed: 90,  target: 12, obstacles: [[8,8],[8,9],[8,10],[8,11],[21,8],[21,9],[21,10],[21,11],[8,18],[9,18],[20,18],[21,18],[14,5],[14,24],[5,14],[24,14]] },
+  { name: 'Cấp 5 — Tốc độ tối đa', speed: 75, target: 15, obstacles: [[4,4],[4,5],[25,4],[25,5],[4,25],[4,24],[25,25],[25,24],[10,15],[11,15],[18,15],[19,15],[15,10],[15,11],[15,18],[15,19],[7,7],[22,22]] },
+];
+
+let level = 0, snake, dir, nextDir, food, timer = null, running = false, paused = false;
+let score = 0, eaten = 0, completed = new Set(JSON.parse(localStorage.getItem('snakeDone') || '[]'));
+let best = parseInt(localStorage.getItem('snakeBest') || '0', 10);
+bestEl.textContent = best;
+
+function key(x, y) { return x + ',' + y; }
+function isObstacle(x, y) {
+  return LEVELS[level].obstacles.some(([ox, oy]) => ox === x && oy === y);
+}
+function randomFood() {
+  const taken = new Set(snake.map(s => key(s.x, s.y)));
+  LEVELS[level].obstacles.forEach(([x, y]) => taken.add(key(x, y)));
+  let x, y;
+  do { x = Math.floor(Math.random() * COLS); y = Math.floor(Math.random() * ROWS); }
+  while (taken.has(key(x, y)));
+  // 20% là mồi đỏ đặc biệt, 30 điểm.
+  return { x, y, bonus: Math.random() < 0.2 };
+}
+
+function renderLevels() {
+  levelsEl.innerHTML = '';
+  LEVELS.forEach((lv, i) => {
+    const b = document.createElement('button');
+    b.textContent = (i + 1) + (completed.has(i) ? ' ✓' : '');
+    b.className = (i === level ? 'active ' : '') + (completed.has(i) ? 'done' : '');
+    b.onclick = () => { level = i; setup(); showOverlay('Cấp ' + (i + 1) + ' — ' + lv.name, 'Mục tiêu: ăn ' + lv.target + ' mồi. Nhấn Bắt đầu để chơi.'); };
+    levelsEl.appendChild(b);
+  });
+}
+
+function setup() {
+  snake = [{ x: 15, y: 15 }, { x: 14, y: 15 }, { x: 13, y: 15 }];
+  dir = { x: 1, y: 0 }; nextDir = dir;
+  score = 0; eaten = 0;
+  food = randomFood();
+  levelLabel.textContent = level + 1;
+  targetEl.textContent = LEVELS[level].target;
+  updateHud(); draw(); renderLevels();
+}
+
+function updateHud() {
+  scoreEl.textContent = score; eatenEl.textContent = eaten;
+  if (score > best) { best = score; bestEl.textContent = best; localStorage.setItem('snakeBest', String(best)); }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Chướng ngại vật
+  ctx.fillStyle = '#475569';
+  LEVELS[level].obstacles.forEach(([x, y]) => ctx.fillRect(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2));
+  // Mồi
+  ctx.fillStyle = food.bonus ? '#ef4444' : '#facc15';
+  ctx.beginPath();
+  ctx.arc(food.x * CELL + CELL / 2, food.y * CELL + CELL / 2, CELL / 2 - 2, 0, Math.PI * 2);
+  ctx.fill();
+  // Rắn
+  snake.forEach((s, i) => {
+    ctx.fillStyle = i === 0 ? '#22c55e' : '#16a34a';
+    ctx.fillRect(s.x * CELL + 1, s.y * CELL + 1, CELL - 2, CELL - 2);
+  });
+}
+
+function step() {
+  if (!running || paused) return;
+  dir = nextDir;
+  const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+  const hitsWall = head.x < 0 || head.y < 0 || head.x >= COLS || head.y >= ROWS;
+  const hitsSelf = snake.some(s => s.x === head.x && s.y === head.y);
+  if (hitsWall || hitsSelf || isObstacle(head.x, head.y)) return gameOver();
+  snake.unshift(head);
+  if (head.x === food.x && head.y === food.y) {
+    score += food.bonus ? 30 : 10; eaten++;
+    if (eaten >= LEVELS[level].target) return levelComplete();
+    food = randomFood();
+  } else {
+    snake.pop();
+  }
+  updateHud(); draw();
+}
+
+function start() {
+  clearInterval(timer);
+  setup();
+  running = true; paused = false;
+  overlay.classList.add('hidden');
+  timer = setInterval(step, LEVELS[level].speed);
+}
+function stopTimer() { clearInterval(timer); running = false; }
+function showOverlay(title, text) {
+  overlayTitle.textContent = title; overlayText.textContent = text;
+  overlay.classList.remove('hidden');
+}
+function gameOver() {
+  stopTimer();
+  showOverlay('💥 Thua rồi!', 'Điểm của bạn: ' + score + '. Nhấn Bắt đầu để chơi lại cấp ' + (level + 1) + '.');
+}
+function levelComplete() {
+  stopTimer();
+  completed.add(level);
+  localStorage.setItem('snakeDone', JSON.stringify([...completed]));
+  renderLevels();
+  if (level >= LEVELS.length - 1) {
+    showOverlay('🏆 Bạn đã phá đảo!', 'Chúc mừng! Bạn đã hoàn thành cả 5 cấp độ với ' + score + ' điểm ở màn cuối.');
+  } else {
+    showOverlay('🎉 Qua màn ' + (level + 1) + '!', 'Bạn đã ăn đủ ' + LEVELS[level].target + ' mồi. Nhấn Bắt đầu để sang cấp ' + (level + 2) + '.');
+    level++;
+  }
+}
+
+function setDir(x, y) {
+  if ((x === -dir.x && y === -dir.y) || (x === dir.x && y === dir.y)) return;
+  nextDir = { x, y };
+}
+const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+document.querySelectorAll('#pad button').forEach(b => {
+  b.onclick = () => { const [x, y] = DIRS[b.dataset.dir]; setDir(x, y); };
+});
+document.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === ' ') { e.preventDefault(); togglePause(); return; }
+  const map = { arrowup: 'up', w: 'up', arrowdown: 'down', s: 'down', arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right' };
+  if (map[k]) { e.preventDefault(); const [x, y] = DIRS[map[k]]; setDir(x, y); }
+});
+// Vuốt trên điện thoại
+let touchX = null, touchY = null;
+canvas.addEventListener('touchstart', e => { const t = e.touches[0]; touchX = t.clientX; touchY = t.clientY; }, { passive: true });
+canvas.addEventListener('touchmove', e => {
+  if (touchX === null) return;
+  const t = e.touches[0], dx = t.clientX - touchX, dy = t.clientY - touchY;
+  if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
+  setDir(...(Math.abs(dx) > Math.abs(dy) ? [Math.sign(dx), 0] : [0, Math.sign(dy)]));
+  touchX = t.clientX; touchY = t.clientY; e.preventDefault();
+}, { passive: false });
+
+function togglePause() {
+  if (!running) return;
+  paused = !paused;
+  document.getElementById('pauseBtn').textContent = paused ? '▶ Tiếp tục' : '⏸ Tạm dừng';
+  if (paused) showOverlay('⏸ Đang tạm dừng', 'Nhấn Tiếp tục hoặc phím Space để chơi tiếp.');
+  else overlay.classList.add('hidden');
+}
+startBtn.onclick = start;
+document.getElementById('pauseBtn').onclick = togglePause;
+document.getElementById('restartBtn').onclick = start;
+
+setup();
+showOverlay('Sẵn sàng chưa?', LEVELS[0].name + ' — Mục tiêu: ăn ' + LEVELS[0].target + ' mồi. Dùng phím mũi tên hoặc WASD để di chuyển.');
+</script>
+</body>
+</html>
